@@ -64,3 +64,10 @@ dagster dev -f .\assets\dagster_assets.py
 
 Внутри вы увидите что-то такое:
 ![01_success_run.png](artifacts%2Fpictures%2F01_success_run.png)
+
+## HW_2
+
+Самый подробный анализ проведён в файле [hw_2.ipynb](notebooks%2Fhw_2.ipynb)
+
+В дополнение была переработана структура ассетов, чтобы код был красив и понятен. Картинка для иллюстрации:
+![02_success_run.png](artifacts%2Fpictures%2F02_success_run.png)

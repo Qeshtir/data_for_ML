@@ -33,7 +33,7 @@ def extract_floors(title):
     return np.nan, np.nan
 
 
-def main():
+def main(OUTPUT_PATH, LOAD_PATH):
     with open(OUTPUT_PATH, "rb") as f:
         try:
             df = dill.load(f)
