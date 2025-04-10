@@ -40,6 +40,9 @@ def main(OUTPUT_PATH, LOAD_PATH):
         except Exception as e:
             print(f"Ошибка загрузки существующих данных: {e}")
 
+    # Не ломаем текущий пайп
+    df = df.drop(columns=['img'])
+
     geo_split = df['geo'].str.split(',', expand=True)
     geo_split.columns = ['geo_' + str(i) for i in range(geo_split.shape[1])]
     df = pd.concat([df, geo_split], axis=1)

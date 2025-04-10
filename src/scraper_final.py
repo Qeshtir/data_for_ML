@@ -5,6 +5,8 @@ import pandas as pd
 import random
 import dill
 import copy
+import aiofiles
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
@@ -28,10 +30,13 @@ BASE_HEADERS = {
 BASE_URL = "https://www.cian.ru/cat.php?deal_type=sale&engine_version=2&object_type[0]=2&offer_type=flat&p="
 BASE_URL_ENDING = "&region=-1"
 
-OUTPUT_PATH = "../artifacts/cian_dataset.dill"
+OUTPUT_PATH = "../artifacts/cian_dataset_with_images.dill"
 
 # Фикс 429-й от циана
 CONCURRENT_REQUESTS = 5
+
+IMAGE_DIR = os.path.join("..", "artifacts", "images")
+os.makedirs(IMAGE_DIR, exist_ok=True)
 
 async def fetch_page(session, url, max_retries=3):
     attempt = 0
@@ -149,8 +154,13 @@ def scrape(html, flats):
         else:
             flats_list.append("No_content")
 
-        # To_Do парсить наименование застройщика. Пример:
-        # <a href="https://cian.ru/zastroishchik-sminex-586/" target="_blank" rel="noopener" class="_93444fe79c--link--wbne1"><span style="letter-spacing:-0.2px" class="_93444fe79c--color_current_color--KRvSV _93444fe79c--color_current_color--MqB6f _93444fe79c--lineHeight_6u--cedXD _93444fe79c--fontWeight_bold--BbhnX _93444fe79c--fontSize_16px--QNYmt _93444fe79c--display_block--KYb25 _93444fe79c--text--b2YS3">Sminex</span></a>
+        # img tag для мультимодальных данных
+        img_class = "_93444fe79c--container--KIwW4 _93444fe79c--container--contain--cYP76"
+        img = item.find('img', class_=img_class)
+        if img and img.get("src"):
+            flats_list.append(img["src"])
+        else:
+            flats_list.append("No_content")
 
         flats.loc[len(flats)] = flats_list
 
@@ -178,17 +188,61 @@ def load_existing_data(OUTPUT_PATH):
                 return dill.load(f)
             except Exception as e:
                 print(f"Ошибка загрузки существующих данных: {e}")
-    return pd.DataFrame(columns=["object_title", "object_subtitle", "jk_name", "deadline", "geo", "price", "meter_price", "desc"])
+    return pd.DataFrame(columns=["object_title", "object_subtitle", "jk_name", "deadline", "geo", "price", "meter_price", "desc", "img"])
 
 
 def save_new_data(new_df, OUTPUT_PATH):
     old_df = load_existing_data(OUTPUT_PATH)
     combined = pd.concat([old_df, new_df], ignore_index=True)
-    combined.drop_duplicates(inplace=True)
+    combined.drop_duplicates(subset=["object_title", "object_subtitle", "jk_name", "deadline", "geo", "price", "meter_price", "desc"], inplace=True)
     after = len(combined)
     with open(OUTPUT_PATH, "wb") as f:
         dill.dump(combined, f)
     print(f"Сохранено {after} объектов (новых добавлено: {after - len(old_df)})")
+
+
+async def download_image(session, url, idx, folder="../artifacts/images"):
+    try:
+        if not url or url == "No_content" or not url.startswith("http"):
+            return url
+
+        filename = f"{idx}_img.jpg"
+        path = os.path.join(IMAGE_DIR, filename)
+        path = os.path.normpath(path)
+
+        if os.path.exists(path):
+            print(f"Изображение уже существует: {path}")
+            return path
+
+        async with session.get(url) as response:
+            if response.status == 200:
+                f = await aiofiles.open(path, mode='wb')
+                await f.write(await response.read())
+                await f.close()
+                print(f"Скачано изображение: {path}")
+                return path
+            else:
+                print(f"Ошибка при скачивании {url}: статус {response.status}")
+                return "No_content"
+    except Exception as e:
+        print(f"Ошибка загрузки изображения {url}: {e}")
+        return "No_content"
+
+
+async def download_all_images(df):
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        # Создаем задачу для каждой строки, где ссылка на изображение корректна
+        for idx, row in df.iterrows():
+            url = row["img"]
+            if url != "No_content" and url.startswith("http"):
+                tasks.append(download_image(session, url, idx))
+            else:
+                # Если ссылки нет, сразу возвращаем No_content
+                tasks.append(asyncio.sleep(0, result=url))
+        results = await asyncio.gather(*tasks)
+        # Обновляем колонку 'img' новыми путями файлов
+        df["img"] = results
 
 
 def scrape_it(OUTPUT_PATH):
@@ -197,9 +251,9 @@ def scrape_it(OUTPUT_PATH):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     flats = pd.DataFrame(
-        columns=["object_title", "object_subtitle", "jk_name", "deadline", "geo", "price", "meter_price", "desc"])
+        columns=["object_title", "object_subtitle", "jk_name", "deadline", "geo", "price", "meter_price", "desc", "img"])
 
-    p = 100
+    p = 60
 
     htmls = asyncio.run(async_htmls(p))
     for document in htmls:
@@ -209,5 +263,15 @@ def scrape_it(OUTPUT_PATH):
 
     loaded_flats = load_existing_data(OUTPUT_PATH)
 
-    print(loaded_flats.head(10))
+    loaded_flats = loaded_flats.copy()
+    asyncio.run(download_all_images(loaded_flats))
+
+    with open(OUTPUT_PATH, "wb") as f:
+        dill.dump(loaded_flats, f)
+
+    print(loaded_flats.tail(10))
     print(f"Saved {len(loaded_flats)} objects")
+
+
+if __name__ == "__main__":
+    scrape_it(OUTPUT_PATH)
